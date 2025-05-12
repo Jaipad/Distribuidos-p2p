@@ -20,11 +20,12 @@ dice_max = int(os.getenv('DICE_MAX'))
 equipos = defaultdict(list)
 puntos = defaultdict(int)
 orden_juego = []
-turno_actual = 0 
+turno_actual = 0
 clientes = []
 nombres = {}
 bloqueo = threading.Lock()
 jugadores_listos = set()
+
 
 def broadcast(mensaje):
     for cliente, _ in clientes:
@@ -33,24 +34,29 @@ def broadcast(mensaje):
         except Exception as e:
             print(f"Error al enviar mensaje: {e}")
 
+
 def manejar_cliente(cliente_socket, addr):
-    global turno_actual  
+    global turno_actual
     equipo_asignado = None
     try:
-        equipos_disponibles = ', '.join(equipos.keys()) if equipos else "Aun no se crean equipos. Puedes crear uno nuevo."
-        
+        equipos_disponibles = ', '.join(equipos.keys(
+        )) if equipos else "Aun no se crean equipos. Puedes crear uno nuevo."
+
         peers = [{"host": c[1][0], "port": c[1][1]} for c in clientes]
         peers.append({"host": addr[0], "port": addr[1]})
 
-        cliente_socket.send(json.dumps({"accion": "registrarse", "equipos_disponibles": equipos_disponibles, "peers": peers}).encode())
+        cliente_socket.send(json.dumps(
+            {"accion": "registrarse", "equipos_disponibles": equipos_disponibles, "peers": peers}).encode())
 
         data = json.loads(cliente_socket.recv(1024).decode())
         equipo_asignado = data.get("equipo")
 
         if equipo_asignado not in equipos:
             if len(equipos) >= max_teams:
-                print(f"Jugador trato de crear equipo {equipo_asignado}, maximo de equipos alcanzado")
-                cliente_socket.send(json.dumps({"accion": "error", "mensaje": f"Los equipos máximos ya fueron creados. Debe unirse a uno de los siguientes equipos: {equipos_disponibles}"}).encode())
+                print(
+                    f"Jugador trato de crear equipo {equipo_asignado}, maximo de equipos alcanzado")
+                cliente_socket.send(json.dumps(
+                    {"accion": "error", "mensaje": f"Los equipos máximos ya fueron creados. Debe unirse a uno de los siguientes equipos: {equipos_disponibles}"}).encode())
                 cliente_socket.close()
                 return
             else:
@@ -59,12 +65,26 @@ def manejar_cliente(cliente_socket, addr):
 
         with bloqueo:
             if len(equipos[equipo_asignado]) < max_members_per_team:
-                equipos[equipo_asignado].append(cliente_socket)
-                nombres[cliente_socket] = equipo_asignado
-                clientes.append((cliente_socket, addr))
-                print(f"Nuevo jugador en {equipo_asignado}")
+                if orden_juego:
+                    votos = realizar_votacion(equipo_asignado, cliente_socket)
+                    if votos.count('aceptar') > votos.count('rechazar'):
+                        equipos[equipo_asignado].append(cliente_socket)
+                        nombres[cliente_socket] = equipo_asignado
+                        clientes.append((cliente_socket, addr))
+                        print(f"Nuevo jugador aceptado en {equipo_asignado}")
+                    else:
+                        cliente_socket.send(json.dumps(
+                            {"accion": "error", "mensaje": "Jugador rechazado por votación"}).encode())
+                        cliente_socket.close()
+                        return
+                else:
+                    equipos[equipo_asignado].append(cliente_socket)
+                    nombres[cliente_socket] = equipo_asignado
+                    clientes.append((cliente_socket, addr))
+                    print(f"Nuevo jugador en {equipo_asignado}")
             else:
-                cliente_socket.send(json.dumps({"accion": "error", "mensaje": "Equipo lleno"}).encode())
+                cliente_socket.send(json.dumps(
+                    {"accion": "error", "mensaje": "Equipo lleno"}).encode())
                 cliente_socket.close()
                 return
 
@@ -80,18 +100,22 @@ def manejar_cliente(cliente_socket, addr):
                 if accion == "listo":
                     with bloqueo:
                         jugadores_listos.add(cliente_socket)
-                        total_jugadores = sum(len(equipos[equipo]) for equipo in equipos)
+                        total_jugadores = sum(
+                            len(equipos[equipo]) for equipo in equipos)
                         if len(jugadores_listos) == total_jugadores:
-                            orden_juego.extend(random.sample(list(equipos.keys()), k=len(equipos)))
-                            broadcast({"accion": "iniciar", "orden": orden_juego})
-                            turno_actual = 0 
+                            orden_juego.extend(random.sample(
+                                list(equipos.keys()), k=len(equipos)))
+                            broadcast(
+                                {"accion": "iniciar", "orden": orden_juego})
+                            turno_actual = 0
                             anunciar_turno()
 
                 elif accion == "tirar_dado":
                     equipo = nombres[cliente_socket]
                     with bloqueo:
                         if equipo != orden_juego[turno_actual]:
-                            cliente_socket.send(json.dumps({"accion": "error", "mensaje": "No es tu turno"}).encode())
+                            cliente_socket.send(json.dumps(
+                                {"accion": "error", "mensaje": "No es tu turno"}).encode())
                             continue
                         tirada = random.randint(dice_min, dice_max)
                         puntos[equipo] += tirada
@@ -112,9 +136,11 @@ def manejar_cliente(cliente_socket, addr):
     finally:
         cliente_socket.close()
 
+
 def anunciar_turno():
     equipo = orden_juego[turno_actual]
     broadcast({"accion": "turno", "equipo": equipo})
+
 
 def iniciar_servidor():
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -126,6 +152,28 @@ def iniciar_servidor():
         print(f"Conexión de {addr}")
         hilo = threading.Thread(target=manejar_cliente, args=(cliente, addr))
         hilo.start()
+
+
+def realizar_votacion(equipo_asignado, nuevo_cliente):
+    votos = []
+
+    def recibir_voto(cliente):
+        try:
+            cliente.send(json.dumps(
+                {"accion": "votar", "mensaje": f"¿Aceptar nuevo jugador en {equipo_asignado}? (aceptar/rechazar)"}).encode())
+            data = cliente.recv(1024).decode()
+            voto = json.loads(data).get("voto")
+            if voto in ['aceptar', 'rechazar']:
+                votos.append(voto)
+        except Exception as e:
+            print(f"Error al recibir voto: {e}")
+
+    for miembro in equipos[equipo_asignado]:
+        if miembro != nuevo_cliente:  # Don't send voting request to the new client
+            recibir_voto(miembro)
+
+    return votos
+
 
 if __name__ == "__main__":
     iniciar_servidor()

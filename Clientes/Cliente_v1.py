@@ -5,6 +5,7 @@ import threading
 HOST = 'localhost'
 PORT = 5000
 
+
 def escuchar_servidor(sock, peers):
     equipo_local = None
     jugadores_listos = set()
@@ -35,7 +36,8 @@ def escuchar_servidor(sock, peers):
                 sock.send(json.dumps({"equipo": equipo}).encode())
                 peers = mensaje.get("peers", [])
                 print(f"Peers: {peers}")
-                input("Escribe 'listo' y presiona Enter para indicar que estás listo para comenzar...")
+                input(
+                    "Escribe 'listo' y presiona Enter para indicar que estás listo para comenzar...")
                 sock.send(json.dumps({"accion": "listo"}).encode())
                 print("Esperando a los demás jugadores...")
 
@@ -49,7 +51,8 @@ def escuchar_servidor(sock, peers):
                     sock.send(json.dumps({"accion": "tirar_dado"}).encode())
 
             elif accion == "actualizar":
-                print(f"{mensaje['equipo']} lanzó y avanzó {mensaje['tirada']} puntos. Total: {mensaje['puntos']}")
+                print(
+                    f"{mensaje['equipo']} lanzó y avanzó {mensaje['tirada']} puntos. Total: {mensaje['puntos']}")
 
             elif accion == "fin":
                 print(f"¡El equipo {mensaje['ganador']} ha ganado!")
@@ -57,9 +60,16 @@ def escuchar_servidor(sock, peers):
 
             elif accion == "error":
                 print(f"Error: {mensaje['mensaje']}")
+
+            elif accion == "votar":
+                voto = input(f"{mensaje['mensaje']} (aceptar/rechazar): ")
+                sock.send(json.dumps(
+                    {"accion": "voto", "voto": voto}).encode())
+
         except Exception as e:
             print(f"Error de conexión: {e}")
             break
+
 
 if __name__ == "__main__":
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
