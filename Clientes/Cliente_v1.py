@@ -6,6 +6,7 @@ HOST = 'localhost'
 PORT = 5000
 
 def escuchar_servidor(sock):
+    equipo_local = None
     while True:
         try:
             data = sock.recv(1024).decode()
@@ -15,9 +16,11 @@ def escuchar_servidor(sock):
             accion = mensaje.get("accion")
 
             if accion == "registrarse":
-                equipo = input("Ingresa tu equipo (Equipo1 o Equipo2): ")
+                equipo = input("Ingresa tu equipo: ")
                 equipo_local = equipo
                 sock.send(json.dumps({"equipo": equipo}).encode())
+                input("Escribe 'listo' y presiona Enter para indicar que estás listo para comenzar...")
+                sock.send(json.dumps({"accion": "listo"}).encode())
 
             elif accion == "iniciar":
                 print(f"Juego iniciado. Orden: {mensaje['orden']}")
@@ -42,7 +45,6 @@ def escuchar_servidor(sock):
             break
 
 if __name__ == "__main__":
-    equipo_local = None
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((HOST, PORT))
     hilo = threading.Thread(target=escuchar_servidor, args=(sock,))

@@ -3,19 +3,30 @@ import threading
 import json
 import random
 from collections import defaultdict
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 HOST = 'localhost'
 PORT = 5000
 
-# Estado global del servidor
-equipos = {"Equipo1": [], "Equipo2": []}
-puntos = {"Equipo1": 0, "Equipo2": 0}
+max_teams = int(os.getenv('MAX_TEAMS'))
+max_members_per_team = int(os.getenv('MAX_MEMBERS_PER_TEAM'))
+board_positions = int(os.getenv('BOARD_POSITIONS'))
+dice_min = int(os.getenv('DICE_MIN'))
+dice_max = int(os.getenv('DICE_MAX'))
+
+equipos = defaultdict(list)
+puntos = defaultdict(int)
 orden_juego = []
 turno_actual = 0
 clientes = []
-nombres = {}  # socket: nombre_equipo
+nombres = {}
 bloqueo = threading.Lock()
 juego_iniciado = False
+jugadores_listos = set()
+
 
 def broadcast(mensaje):
     for cliente in clientes:
@@ -24,46 +35,69 @@ def broadcast(mensaje):
         except:
             pass
 
+
 def manejar_cliente(cliente_socket):
     global juego_iniciado, turno_actual
 
     equipo_asignado = None
     try:
-        # Solicitar nombre de equipo
-        cliente_socket.send(json.dumps({"accion": "registrarse"}).encode())
+        equipos_disponibles = ', '.join(equipos.keys(
+        )) if equipos else "Aun no se crean equipos. Puedes crear uno nuevo."
+        cliente_socket.send(json.dumps(
+            {"accion": "registrarse", "equipos_disponibles": equipos_disponibles}).encode())
+
         data = json.loads(cliente_socket.recv(1024).decode())
         equipo_asignado = data.get("equipo")
 
         if equipo_asignado not in equipos:
-            cliente_socket.send(json.dumps({"accion": "error", "mensaje": "Equipo inválido"}).encode())
-            cliente_socket.close()
-            return
+            if len(equipos) >= max_teams:
+                print(
+                    f"Jugador trato de crear equipo {equipo_asignado}, maximo de equipos alcanzado")
+                cliente_socket.send(json.dumps(
+                    {"accion": "error", "mensaje": f"Los equipos máximos ya fueron creados. Debe unirse a uno de los siguientes equipos: {equipos_disponibles}"}).encode())
+                cliente_socket.close()
+                return
+            else:
+                equipos[equipo_asignado] = []
+                print(f"Equipo creado de manera correcta: {equipo_asignado}")
 
         with bloqueo:
-            equipos[equipo_asignado].append(cliente_socket)
-            nombres[cliente_socket] = equipo_asignado
-            clientes.append(cliente_socket)
-            print(f"Nuevo jugador en {equipo_asignado}")
-
-            # ¿Hay al menos un jugador por equipo?
-            if all(len(v) >= 1 for v in equipos.values()) and not juego_iniciado:
-                orden_juego.extend(random.sample(list(equipos.keys()), k=2))
-                juego_iniciado = True
-                broadcast({"accion": "iniciar", "orden": orden_juego})
-                anunciar_turno()
+            if len(equipos[equipo_asignado]) < max_members_per_team:
+                equipos[equipo_asignado].append(cliente_socket)
+                nombres[cliente_socket] = equipo_asignado
+                clientes.append(cliente_socket)
+                print(f"Nuevo jugador en {equipo_asignado}")
+            else:
+                cliente_socket.send(json.dumps(
+                    {"accion": "error", "mensaje": "Equipo lleno"}).encode())
+                cliente_socket.close()
+                return
 
         while True:
             data = cliente_socket.recv(1024).decode()
             if not data:
                 break
             mensaje = json.loads(data)
-            if mensaje.get("accion") == "tirar_dado":
+            accion = mensaje.get("accion")
+
+            if accion == "listo":
+                with bloqueo:
+                    jugadores_listos.add(cliente_socket)
+                    if len(jugadores_listos) == sum(len(equipos[equipo]) for equipo in equipos):
+                        juego_iniciado = True
+                        orden_juego.extend(random.sample(
+                            list(equipos.keys()), k=len(equipos)))
+                        broadcast({"accion": "iniciar", "orden": orden_juego})
+                        anunciar_turno()
+
+            elif accion == "tirar_dado" and juego_iniciado:
                 equipo = nombres[cliente_socket]
                 with bloqueo:
                     if equipo != orden_juego[turno_actual]:
-                        cliente_socket.send(json.dumps({"accion": "error", "mensaje": "No es tu turno"}).encode())
+                        cliente_socket.send(json.dumps(
+                            {"accion": "error", "mensaje": "No es tu turno"}).encode())
                         continue
-                    tirada = random.randint(1, 6)
+                    tirada = random.randint(dice_min, dice_max)
                     puntos[equipo] += tirada
                     broadcast({
                         "accion": "actualizar",
@@ -71,7 +105,7 @@ def manejar_cliente(cliente_socket):
                         "tirada": tirada,
                         "puntos": puntos[equipo]
                     })
-                    if puntos[equipo] >= 100:
+                    if puntos[equipo] >= board_positions:
                         broadcast({"accion": "fin", "ganador": equipo})
                         break
                     turno_actual = (turno_actual + 1) % len(orden_juego)
@@ -81,9 +115,11 @@ def manejar_cliente(cliente_socket):
     finally:
         cliente_socket.close()
 
+
 def anunciar_turno():
     equipo = orden_juego[turno_actual]
     broadcast({"accion": "turno", "equipo": equipo})
+
 
 def iniciar_servidor():
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -95,6 +131,7 @@ def iniciar_servidor():
         print(f"Conexión de {addr}")
         hilo = threading.Thread(target=manejar_cliente, args=(cliente,))
         hilo.start()
+
 
 if __name__ == "__main__":
     iniciar_servidor()
