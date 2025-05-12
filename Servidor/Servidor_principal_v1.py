@@ -3,8 +3,12 @@ import threading
 import json
 import random
 from collections import defaultdict
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'RMI_log')))
+from rmi import registrar_evento  
+
 
 load_dotenv()
 
@@ -16,6 +20,7 @@ max_members_per_team = int(os.getenv('MAX_MEMBERS_PER_TEAM'))
 board_positions = int(os.getenv('BOARD_POSITIONS'))
 dice_min = int(os.getenv('DICE_MIN'))
 dice_max = int(os.getenv('DICE_MAX'))
+
 
 equipos = defaultdict(list)
 puntos = defaultdict(int)
@@ -58,10 +63,12 @@ def manejar_cliente(cliente_socket, addr):
                 cliente_socket.send(json.dumps(
                     {"accion": "error", "mensaje": f"Los equipos máximos ya fueron creados. Debe unirse a uno de los siguientes equipos: {equipos_disponibles}"}).encode())
                 cliente_socket.close()
+                registrar_evento("Servidor", f"Rechazo: se intentó crear el equipo '{equipo_asignado}', pero se alcanzó el máximo")
                 return
             else:
                 equipos[equipo_asignado] = []
                 print(f"Equipo creado de manera correcta: {equipo_asignado}")
+                registrar_evento("Servidor", f"Equipo creado: {equipo_asignado}")
 
         with bloqueo:
             if len(equipos[equipo_asignado]) < max_members_per_team:
@@ -72,16 +79,19 @@ def manejar_cliente(cliente_socket, addr):
                         nombres[cliente_socket] = equipo_asignado
                         clientes.append((cliente_socket, addr))
                         print(f"Nuevo jugador aceptado en {equipo_asignado}")
+                        registrar_evento("Servidor", f"Jugador se unió al equipo {equipo_asignado} desde {addr}")
                     else:
                         cliente_socket.send(json.dumps(
                             {"accion": "error", "mensaje": "Jugador rechazado por votación"}).encode())
                         cliente_socket.close()
+                        registrar_evento("Servidor", f"Jugador rechazado por votación al intentar unirse a {equipo_asignado} desde {addr}")
                         return
                 else:
                     equipos[equipo_asignado].append(cliente_socket)
                     nombres[cliente_socket] = equipo_asignado
                     clientes.append((cliente_socket, addr))
                     print(f"Nuevo jugador en {equipo_asignado}")
+                    registrar_evento("Servidor", f"Jugador aceptado en el equipo {equipo_asignado} desde {addr}")
             else:
                 cliente_socket.send(json.dumps(
                     {"accion": "error", "mensaje": "Equipo lleno"}).encode())
@@ -105,6 +115,7 @@ def manejar_cliente(cliente_socket, addr):
                         if len(jugadores_listos) == total_jugadores:
                             orden_juego.extend(random.sample(
                                 list(equipos.keys()), k=len(equipos)))
+                            registrar_evento("Servidor", f"Juego iniciado. Orden: {orden_juego}")
                             broadcast(
                                 {"accion": "iniciar", "orden": orden_juego})
                             turno_actual = 0
@@ -119,6 +130,7 @@ def manejar_cliente(cliente_socket, addr):
                             continue
                         tirada = random.randint(dice_min, dice_max)
                         puntos[equipo] += tirada
+                        registrar_evento("Servidor", f"{equipo} lanzó el dado: {tirada}. Total acumulado: {puntos[equipo]}")
                         broadcast({
                             "accion": "actualizar",
                             "equipo": equipo,
@@ -127,6 +139,7 @@ def manejar_cliente(cliente_socket, addr):
                         })
                         if puntos[equipo] >= board_positions:
                             broadcast({"accion": "fin", "ganador": equipo})
+                            registrar_evento("Servidor", f"El equipo {equipo} ganó la partida")
                             break
                         turno_actual = (turno_actual + 1) % len(orden_juego)
                         anunciar_turno()
